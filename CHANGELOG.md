@@ -43,3 +43,16 @@ First version. Prepared but not tagged: the tag is created after review.
   Woodpecker CI configuration.
 - `fpatch --version` prints the bare version number, the one used in the
   archive names.
+- `install.sh`: installs a release (the latest, or `--version vX.Y.Z`) into
+  `~/.local/bin` or `--prefix DIR` after checking the archive's sha256 against
+  the release's `checksums.txt` (a mismatch or a missing line is a refusal and
+  leaves the installed binary alone). Downloads with `gh release download`, or
+  with curl on the public release URL when `gh` is missing or not logged in.
+  `--status` (exit 1 when not installed or outdated), `--uninstall` (only its
+  own binary), `--dry-run`, `--from-dir DIR` for an offline install from
+  `make dist` output, `--repo`. No sudo, bash 3.2 compatible, idempotent.
+- `scripts/release.sh vX.Y.Z`: builds the release archives on a build host
+  (`BUILD_HOST`), verifies them and prints what it would upload; it publishes
+  only with `--publish`. `scripts/test-install.sh` runs the installer against a
+  real `dist/` in a scratch HOME, and `scripts/test-release.sh` runs `release.sh`
+  against a fake build host and a fake `gh`. See `docs/RELEASING.md`.
