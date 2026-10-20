@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -115,19 +114,15 @@ func (localFS) Write(ctx context.Context, path string, data []byte, opts WriteOp
 	return atomicReplace(real, data, fi)
 }
 
-// writeBackup stores data at path (following a symlink at path, like Write
-// does), creating the file if it does not exist yet.
+// writeBackup stores data at path. Whatever is already there is replaced, a
+// symlink included (the rename replaces the link, it does not follow it), so a
+// FILE.bak that someone planted as a link cannot redirect the write elsewhere.
 func writeBackup(path string, data []byte, like os.FileInfo) error {
-	target := path
-	if real, err := filepath.EvalSymlinks(path); err == nil {
-		target = real
-	} else if !errors.Is(err, fs.ErrNotExist) {
+	dir, err := filepath.EvalSymlinks(filepath.Dir(path))
+	if err != nil {
 		return err
-	} else if dir, err := filepath.EvalSymlinks(filepath.Dir(path)); err == nil {
-		// The file does not exist; resolve the directory only.
-		target = filepath.Join(dir, filepath.Base(path))
 	}
-	return atomicReplace(target, data, like)
+	return atomicReplace(filepath.Join(dir, filepath.Base(path)), data, like)
 }
 
 // atomicReplace writes data to a temporary file in the directory of target and

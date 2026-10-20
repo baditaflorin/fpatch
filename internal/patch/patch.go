@@ -307,8 +307,13 @@ func (a *applier) insert(h spec.Hunk, hr *HunkResult) []edit {
 	}
 	body := h.NewText()
 	var es []edit
+	seen := map[int]bool{} // several matches on one line insert once
 	for _, s := range starts {
 		at := a.insertionPoint(h.Op == spec.OpInsertAfter, s, s+len(anchor))
+		if seen[at] {
+			continue
+		}
+		seen[at] = true
 		if a.opt.Idempotent && a.alreadyThere(h.Op == spec.OpInsertAfter, at, body) {
 			continue
 		}

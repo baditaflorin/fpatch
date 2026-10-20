@@ -166,6 +166,12 @@ func TestApplySuccess(t *testing.T) {
 			"--\nk 1\nm\n--\nk 2\n", []Status{Applied},
 		},
 		{
+			"several matches on one line insert once",
+			"k k\nm\n",
+			"=== insert-after count=2\nk\n=== with\nX\n=== end\n",
+			"k k\nX\nm\n", []Status{Applied},
+		},
+		{
 			"a single empty line inserts a blank line",
 			"a\nb\n",
 			"=== insert-after\na\n=== with\n\n=== end\n",

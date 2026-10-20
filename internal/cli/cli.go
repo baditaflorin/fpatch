@@ -81,6 +81,7 @@ type options struct {
 	marker          string
 	timeout         time.Duration
 	version, help   bool
+	hostSet, fsSet  bool // given on the command line, even if empty
 }
 
 // Run executes the command line args (without the program name).
@@ -107,6 +108,14 @@ func Run(args []string, env Env) int {
 
 	c := &command{env: env, o: &o}
 	files, err := parseArgs(fl, args)
+	fl.Visit(func(f *flag.Flag) {
+		switch f.Name {
+		case "host":
+			o.hostSet = true
+		case "fs":
+			o.fsSet = true
+		}
+	})
 	c.json = o.jsonOut
 	if err != nil {
 		code := c.usageError(err.Error())
@@ -183,6 +192,14 @@ func (c *command) run(files []string) int {
 		}
 		seen[key] = f
 		exact[f] = true
+	}
+	// An empty value must not quietly fall back to the local disk: a script
+	// with --host "$HOST" and HOST unset would patch the wrong machine.
+	if o.hostSet && o.host == "" {
+		return c.usageError("--host needs a host alias (an empty value would patch the local files instead)")
+	}
+	if o.fsSet && o.fsTarget == "" {
+		return c.usageError("--fs needs a target such as ssh:web1 (use --fs local for the local disk)")
 	}
 	if o.host != "" && o.fsTarget != "" {
 		return c.usageError("--host and --fs cannot be used together")

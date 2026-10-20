@@ -184,6 +184,9 @@ fp_write() {
       fp_err io "the backup path $fp_p$fp_bak exists and is not a regular file"
       return 0
     fi
+    if [ -L "$fp_p$fp_bak" ]; then
+      rm -f "$fp_p$fp_bak"
+    fi
     if ! fp_o=$(cp -p "$fp_real" "$fp_p$fp_bak" 2>&1); then
       fp_clean
       fp_err io "cannot write the backup $fp_p$fp_bak: $fp_o"

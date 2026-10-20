@@ -276,11 +276,11 @@ swallowed as text.
 
 | Flag | Meaning |
 | --- | --- |
-| `--host ALIAS` | Patch the files on a remote host over ssh. `ALIAS` is a host name or `~/.ssh/config` alias. |
+| `--host ALIAS` | Patch the files on a remote host over ssh. `ALIAS` is a host name or `~/.ssh/config` alias. An empty value is an error, never "local". |
 | `--fs TARGET` | Any registered file system, `name` or `name:arg` (`--host web1` is `--fs ssh:web1`). Default `local`. |
 | `-n`, `--dry-run` | Compute and show everything; write nothing. |
 | `--json` | One JSON object per file, then a summary object ([schema](#json-output)). |
-| `--backup` | Keep the previous content of each changed file as `FILE.bak` (same mode). An existing `FILE.bak` is replaced. |
+| `--backup` | Keep the previous content of each changed file as `FILE.bak` (same mode). An existing `FILE.bak` is replaced (a symlink at that path is replaced too, not followed). |
 | `--idempotent` | A hunk whose effect is already present counts as success instead of a miss. |
 | `-q`, `--quiet` | Do not print diffs (also leaves them out of `--json`), for files whose content should not reach a log. |
 | `-f`, `--spec FILE` | Read the spec from `FILE` instead of stdin (`-` is stdin). |
@@ -394,6 +394,8 @@ settings apply, and **nothing is installed on the remote side**.
   read and write; it is not one connection per file.
 - Files are read with `cat` and replaced with a temporary file in the same
   directory plus `mv`, keeping the mode (and the owner when permitted).
+- Relative paths are relative to the remote login directory (usually the home
+  directory); use absolute paths to be sure.
 - Paths come only from the command line and are validated: control characters
   are refused, the alias cannot start with `-`, and paths are passed to the
   remote shell as quoted data. The spec on stdin cannot add paths.

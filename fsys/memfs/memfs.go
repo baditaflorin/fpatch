@@ -226,16 +226,14 @@ func (m *FS) Write(ctx context.Context, p string, data []byte, opts fsys.WriteOp
 		return err
 	}
 	if opts.BackupSuffix != "" {
-		bak, err := m.resolve(p + opts.BackupSuffix)
-		if err != nil {
-			return err
-		}
+		bak := clean(p + opts.BackupSuffix)
 		if m.dirs[bak] {
 			return fmt.Errorf("backup %s: %w", bak, fsys.ErrNotRegular)
 		}
 		if err := m.failing[bak]; err != nil {
 			return err
 		}
+		delete(m.links, bak) // a backup replaces a symlink, it does not follow it
 		b := m.files[bak]
 		if b == nil {
 			b = &node{}

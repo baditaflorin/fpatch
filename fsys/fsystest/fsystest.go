@@ -74,6 +74,7 @@ func Run(t *testing.T, newFS Factory) {
 		{"NoTempFilesLeft", noTempFilesLeft},
 		{"Conflict", conflict},
 		{"Backup", backup},
+		{"BackupDoesNotFollowSymlinks", backupSymlink},
 		{"BackupFailureLeavesTheFileAlone", backupFailure},
 		{"InvalidPaths", invalidPaths},
 		{"CancelledContext", cancelled},
@@ -412,6 +413,25 @@ func backup(t *testing.T, ctx context.Context, f fsys.FS, env Env) {
 	mustWrite(t, ctx, f, env.Path("b"), []byte("patched again\n"), fsys.WriteOptions{BackupSuffix: ".orig"})
 	if d, _ := mustGet(t, env, "b.orig"); string(d) != "patched\n" {
 		t.Errorf("second backup = %q", d)
+	}
+}
+
+func backupSymlink(t *testing.T, ctx context.Context, f fsys.FS, env Env) {
+	env.Put(t, "victim", []byte("precious\n"), 0o644)
+	env.Put(t, "f", []byte("original\n"), 0o644)
+	env.Symlink(t, "f.bak", "victim") // planted before the run
+	mustWrite(t, ctx, f, env.Path("f"), []byte("patched\n"), fsys.WriteOptions{BackupSuffix: ".bak"})
+	if d, _ := mustGet(t, env, "victim"); string(d) != "precious\n" {
+		t.Errorf("a symlink planted as the backup path redirected the write: victim = %q", d)
+	}
+	if env.IsSymlink(t, "f.bak") {
+		t.Error("the backup path is still a symlink; the backup must replace it")
+	}
+	if d, _ := mustGet(t, env, "f.bak"); string(d) != "original\n" {
+		t.Errorf("f.bak = %q", d)
+	}
+	if d, _ := mustGet(t, env, "f"); string(d) != "patched\n" {
+		t.Errorf("f = %q", d)
 	}
 }
 

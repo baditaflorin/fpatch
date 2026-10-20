@@ -46,7 +46,8 @@ it in a way that is easy to inspect.
   (which also removes diffs from `--json`); error messages may still quote a
   few lines near a miss.
 - `--backup` leaves a copy of the previous content, with the same mode, next to
-  the file. Remember it when the file holds secrets.
+  the file. Remember it when the file holds secrets. A backup replaces whatever
+  is at `FILE.bak`; if that is a symlink, the link is replaced and not followed.
 - Ownership, ACLs, extended attributes and SELinux labels are not preserved
   (ownership is restored only when permitted). The replacement is a new file.
 
