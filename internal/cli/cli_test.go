@@ -364,7 +364,7 @@ func TestTimeoutIsReported(t *testing.T) {
 }
 
 func TestVersionAndHelp(t *testing.T) {
-	if r := run(t, "", "--version"); r.code != 0 || r.stdout != "fpatch v9.9.9-test\n" {
+	if r := run(t, "", "--version"); r.code != 0 || r.stdout != "v9.9.9-test\n" {
 		t.Errorf("--version: exit=%d stdout=%q", r.code, r.stdout)
 	}
 	for _, flag := range []string{"--help", "-h"} {

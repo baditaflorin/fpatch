@@ -22,7 +22,7 @@ func TestMain(m *testing.M) {
 	}
 	defer os.RemoveAll(dir)
 	binary = filepath.Join(dir, "fpatch")
-	build := exec.Command("go", "build", "-ldflags", "-X main.version=v0.0.0-e2e", "-o", binary, ".")
+	build := exec.Command("go", "build", "-ldflags", "-X main.version=0.0.0-e2e", "-o", binary, ".")
 	if out, err := build.CombinedOutput(); err != nil {
 		panic("go build failed: " + err.Error() + "\n" + string(out))
 	}
@@ -73,7 +73,7 @@ func readFile(t *testing.T, p string) string {
 const swap = "=== replace\nold\n=== with\nnew\n=== end\n"
 
 func TestBinaryVersion(t *testing.T) {
-	if o := fpatch(t, "", nil, "--version"); o.code != 0 || o.stdout != "fpatch v0.0.0-e2e\n" {
+	if o := fpatch(t, "", nil, "--version"); o.code != 0 || o.stdout != "0.0.0-e2e\n" {
 		t.Errorf("exit=%d stdout=%q", o.code, o.stdout)
 	}
 }

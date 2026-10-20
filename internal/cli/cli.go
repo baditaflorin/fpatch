@@ -61,7 +61,7 @@ Flags:
   -f, --spec FILE   read the spec from FILE instead of stdin ("-" is stdin)
   --marker STR      directive marker instead of "===" (for specs that contain "=== end")
   --timeout DUR     give up after DUR (default 2m, 0 for no limit)
-  --version         print the version
+  --version         print the version number (nothing else)
   -h, --help        print this help
 
 Exit codes:
@@ -127,7 +127,7 @@ func Run(args []string, env Env) int {
 		io.WriteString(env.Stdout, usage)
 		return engine.ExitApplied
 	case o.version:
-		fmt.Fprintf(env.Stdout, "fpatch %s\n", env.Version)
+		fmt.Fprintln(env.Stdout, env.Version)
 		return engine.ExitApplied
 	}
 	return c.run(files)
@@ -240,7 +240,7 @@ func (c *command) run(files []string) int {
 	rep := engine.Run(ctx, fs, engine.Request{
 		Files:   files,
 		Spec:    sp,
-		Options: engine.Options{DryRun: o.dryRun, Backup: o.backup, Idempotent: o.idem},
+		Options: engine.Options{DryRun: o.dryRun, Backup: o.backup, Idempotent: o.idem, NoDiff: o.quiet},
 	})
 	if err := ctx.Err(); err != nil && rep.ExitCode == engine.ExitIO {
 		rep.Notes = append(rep.Notes, "the --timeout of "+o.timeout.String()+" expired")

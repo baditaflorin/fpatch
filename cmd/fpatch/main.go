@@ -5,11 +5,12 @@ package main
 import (
 	"os"
 	"runtime/debug"
+	"strings"
 
 	"github.com/baditaflorin/fpatch/internal/cli"
 )
 
-// version is set at build time (-ldflags "-X main.version=v0.1.0"); a binary
+// version is set at build time (-ldflags "-X main.version=0.1.0"); a binary
 // built with "go install ...@vX" falls back to the module version.
 var version = ""
 
@@ -28,12 +29,18 @@ func isTerminal(f *os.File) bool {
 	return err == nil && fi.Mode()&os.ModeCharDevice != 0
 }
 
+// versionString is the bare version number, without a leading "v", exactly as
+// it appears in release archive names.
 func versionString() string {
-	if version != "" {
-		return version
+	v := version
+	if v == "" {
+		if bi, ok := debug.ReadBuildInfo(); ok {
+			v = bi.Main.Version
+		}
 	}
-	if bi, ok := debug.ReadBuildInfo(); ok && bi.Main.Version != "" && bi.Main.Version != "(devel)" {
-		return bi.Main.Version
+	v = strings.TrimPrefix(v, "v")
+	if v == "" || v == "(devel)" {
+		return "dev"
 	}
-	return "dev"
+	return v
 }

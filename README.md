@@ -60,15 +60,20 @@ go install github.com/baditaflorin/fpatch/cmd/fpatch@v0.1.0
 From a checkout:
 
 ```sh
-make build        # ./fpatch for this machine
-make dist         # darwin/linux x amd64/arm64 into dist/, with SHA256SUMS
+make build                # ./fpatch for this machine
+make dist VERSION=v0.1.0  # darwin/linux x amd64/arm64 archives in dist/
 ```
 
-`make dist` only builds locally. Nothing is published by it; releases are
-described in [CONTRIBUTING.md](CONTRIBUTING.md).
+`make dist` writes one archive per target, `dist/fpatch_0.1.0_darwin_arm64.tar.gz`
+and so on (the binary, `LICENSE` and `README.md` at the top level of each), and
+`dist/checksums.txt` in `<sha256>  <file>` format. It needs only Go, `tar`,
+`gzip` and `sha256sum` or `shasum`. It builds locally and publishes nothing;
+releases are described in [CONTRIBUTING.md](CONTRIBUTING.md).
 
-`fpatch --version` prints the version. A binary installed with `go install`
-reports its module version; a `make` build reports `git describe`.
+`fpatch --version` prints the bare version number (`0.1.0`, the number in the
+archive names) and nothing else. A binary installed with `go install` reports
+its module version without the leading `v`; a plain `make build` reports
+`git describe`.
 
 ## Quick start
 
@@ -286,7 +291,7 @@ swallowed as text.
 | `-f`, `--spec FILE` | Read the spec from `FILE` instead of stdin (`-` is stdin). |
 | `--marker STR` | Directive marker instead of `===`. |
 | `--timeout DUR` | Give up after `DUR` (default `2m`; `0` for no limit). |
-| `--version`, `-h` | Print the version / the help. |
+| `--version`, `-h` | Print the version number / the help. |
 
 Flags may come before, between or after the file names. `--` ends the flags, so
 a file called `-n` is `fpatch -- -n`.
@@ -428,7 +433,9 @@ What it can and cannot do is spelled out in [SECURITY.md](SECURITY.md).
   after the other. If a write fails part-way (disk full, permission, lost
   connection), the files already replaced are put back from the copies held in
   memory, and the report says what happened to each. If a restore also fails,
-  the report says which file is left patched (exit 3). A process killed between
+  the report says which file is left patched (exit 3). Over ssh, if the
+  connection drops during a write, fpatch reconnects once to read the file back
+  and undo the run. A process killed between
   two renames, or a power cut, can leave some files patched and some not;
   nothing short of a journal prevents that.
 - Symlinks are followed: the target gets the new content and the link stays a
@@ -500,7 +507,7 @@ When not to use it:
 make check        # gofmt check, go vet, tests
 make race         # tests with the race detector
 make fuzz         # fuzz the spec parser, the matcher, the diff and the quoting
-make dist         # cross-build into dist/
+make dist         # archives and checksums.txt in dist/
 ```
 
 The tests include fuzzing seeds, atomicity and rollback tests, a contract suite

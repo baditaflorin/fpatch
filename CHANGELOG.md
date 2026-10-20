@@ -37,5 +37,9 @@ First version. Prepared but not tagged: the tag is created after review.
   A contract test suite (`fsys/fsystest`) and an in-memory backend
   (`fsys/memfs`) are included.
 - Documentation: README, `docs/ARCHITECTURE.md`, `CONTRIBUTING.md`,
-  `SECURITY.md`; a `Makefile` (`make dist` cross-builds darwin and linux for
-  amd64 and arm64 with checksums); a Woodpecker CI configuration.
+  `SECURITY.md`; a `Makefile` (`make dist` writes
+  `fpatch_<version>_<os>_<arch>.tar.gz` for darwin and linux on amd64 and arm64,
+  each with the binary, LICENSE and README.md, plus `checksums.txt`); a
+  Woodpecker CI configuration.
+- `fpatch --version` prints the bare version number, the one used in the
+  archive names.

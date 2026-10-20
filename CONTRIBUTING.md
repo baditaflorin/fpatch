@@ -80,12 +80,12 @@ Releases are cut by a maintainer after the change is reviewed and merged.
 1. Move the `Unreleased` entries of `CHANGELOG.md` under the new version and
    date, and commit.
 2. `make check race` on a clean `main`, then `make dist VERSION=vX.Y.Z` and look
-   at `dist/SHA256SUMS`.
+   at `dist/checksums.txt`. Do this on a build machine, not necessarily a laptop.
 3. Tag: `git tag -a vX.Y.Z -m "fpatch vX.Y.Z" && git push origin vX.Y.Z`.
    `go install github.com/baditaflorin/fpatch/cmd/fpatch@vX.Y.Z` works from the
    tag alone.
-4. If you publish a GitHub release, attach the contents of `dist/` including
-   `SHA256SUMS`.
+4. If you publish a GitHub release, attach the contents of `dist/`: the four
+   `fpatch_X.Y.Z_<os>_<arch>.tar.gz` archives and `checksums.txt`.
 
 Nothing in the repository publishes or tags anything automatically.
 
