@@ -7,9 +7,9 @@ codes are the public interface; so is the `fsys.FS` contract.
 
 ## [Unreleased]
 
-## [0.1.0] - not yet released
+## [0.1.0] - 2026-10-20
 
-First version. Prepared but not tagged: the tag is created after review.
+First release.
 
 ### Added
 
