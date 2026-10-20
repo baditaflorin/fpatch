@@ -76,18 +76,22 @@ only the tools listed in the README, do not introduce `local`, arrays, `[[`,
 ## Releasing
 
 Releases are cut by a maintainer after the change is reviewed and merged.
+[docs/RELEASING.md](docs/RELEASING.md) has the whole procedure; in short:
 
 1. Move the `Unreleased` entries of `CHANGELOG.md` under the new version and
-   date, and commit.
-2. `make check race` on a clean `main`, then `make dist VERSION=vX.Y.Z` and look
-   at `dist/checksums.txt`. Do this on a build machine, not necessarily a laptop.
-3. Tag: `git tag -a vX.Y.Z -m "fpatch vX.Y.Z" && git push origin vX.Y.Z`.
-   `go install github.com/baditaflorin/fpatch/cmd/fpatch@vX.Y.Z` works from the
-   tag alone.
-4. If you publish a GitHub release, attach the contents of `dist/`: the four
-   `fpatch_X.Y.Z_<os>_<arch>.tar.gz` archives and `checksums.txt`.
+   date, commit, and merge to `main`.
+2. `BUILD_HOST=<a Linux build machine with docker> scripts/release.sh vX.Y.Z`
+   builds the archives there, checks them here and prints what it would
+   upload. It is a dry run: nothing is published and no tag is created.
+3. The same command with `--publish` creates the GitHub release (and the tag,
+   at the commit that was built) from the maintainer's machine, uploading the
+   four `fpatch_X.Y.Z_<os>_<arch>.tar.gz` archives, `checksums.txt` and
+   `install.sh`. `go install github.com/baditaflorin/fpatch/cmd/fpatch@vX.Y.Z`
+   works from the tag alone.
 
-Nothing in the repository publishes or tags anything automatically.
+Nothing in the repository publishes or tags anything automatically;
+`scripts/release.sh --publish` is the one command that does, and a maintainer
+runs it by hand.
 
 ## Conduct
 

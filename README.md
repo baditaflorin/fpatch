@@ -51,29 +51,85 @@ other backends can be added (see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)).
 
 ## Install
 
+### From a release
+
+Each [release](https://github.com/baditaflorin/fpatch/releases) has archives for
+macOS and Linux on amd64 and arm64, a `checksums.txt`, and `install.sh`. The
+installer picks the archive for your machine, checks its sha256 against the
+`checksums.txt` of the same release (it refuses on a mismatch or a missing
+line), and installs one binary into `~/.local/bin`. It needs no `sudo`, writes
+nothing else, and is safe to run twice.
+
+```sh
+curl -fsSLO https://github.com/baditaflorin/fpatch/releases/latest/download/install.sh
+less install.sh     # read it first
+bash install.sh
+```
+
+From a checkout, `./install.sh` is the same script. Downloads use
+`gh release download` when `gh` is installed and logged in, and plain `curl` on
+the public release URL otherwise; the installer says which one it used.
+
+```sh
+./install.sh --version v0.1.0    # a specific release instead of the latest
+./install.sh --prefix ~/bin      # install somewhere else
+./install.sh --dry-run           # say what would happen, write nothing
+./install.sh --status            # installed version, is the prefix on PATH, latest release
+./install.sh --uninstall         # remove the binary, nothing else
+./install.sh --from-dir dist     # offline: install from a `make dist` directory
+```
+
+`--status` exits 1 when fpatch is not installed or is older than the latest
+release. When the prefix is not on your `PATH` the installer says so and prints
+the line to add; it never edits your shell profile.
+
+### Verify
+
+```sh
+fpatch --version     # the bare version (0.1.0) and nothing else
+# by hand, in the directory with the downloaded archive and checksums.txt
+# (on macOS use: shasum -a 256 -c -):
+grep fpatch_0.1.0_linux_amd64.tar.gz checksums.txt | sha256sum -c -
+```
+
+`checksums.txt` is the only trust anchor. [docs/RELEASING.md](docs/RELEASING.md)
+says what that protects against and what it does not.
+
+### With Go
+
 With a Go toolchain (Go 1.22 or newer), once a version is tagged:
 
 ```sh
 go install github.com/baditaflorin/fpatch/cmd/fpatch@v0.1.0
 ```
 
-From a checkout:
+### From source
 
 ```sh
 make build                # ./fpatch for this machine
 make dist VERSION=v0.1.0  # darwin/linux x amd64/arm64 archives in dist/
+./install.sh --from-dir dist
 ```
 
 `make dist` writes one archive per target, `dist/fpatch_0.1.0_darwin_arm64.tar.gz`
 and so on (the binary, `LICENSE` and `README.md` at the top level of each), and
 `dist/checksums.txt` in `<sha256>  <file>` format. It needs only Go, `tar`,
 `gzip` and `sha256sum` or `shasum`. It builds locally and publishes nothing;
-releases are described in [CONTRIBUTING.md](CONTRIBUTING.md).
+cutting a release is described in [docs/RELEASING.md](docs/RELEASING.md).
 
 `fpatch --version` prints the bare version number (`0.1.0`, the number in the
 archive names) and nothing else. A binary installed with `go install` reports
 its module version without the leading `v`; a plain `make build` reports
 `git describe`.
+
+### Uninstall
+
+```sh
+./install.sh --uninstall
+```
+
+removes the one binary the installer put in the prefix (a binary from
+`go install` lives in `$(go env GOPATH)/bin` and is not touched).
 
 ## Quick start
 

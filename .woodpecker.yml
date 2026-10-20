@@ -32,3 +32,16 @@ steps:
       - go vet ./...
       - go test ./...
       - go test -race ./...
+
+  # The installer and the release script: shellcheck, then the installer tests against a real dist/
+  # built from this commit. A fake gh and curl serves the release from dist/: no network, nothing is published.
+  shellcheck:
+    image: koalaman/shellcheck-alpine:stable
+    commands:
+      - shellcheck install.sh scripts/release.sh scripts/test-install.sh scripts/test-release.sh
+  installer:
+    image: golang:1.26
+    commands:
+      - make dist VERSION=v0.0.0
+      - bash scripts/test-install.sh dist
+      - bash scripts/test-release.sh
