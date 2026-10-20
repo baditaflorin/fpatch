@@ -76,7 +76,11 @@ calls `engine.Run`.
    (`ErrConflict`) rather than overwritten.
 5. If a `Write` fails, restore the files already written from the in-memory
    originals (with its own 30 s budget, even if the run's context expired),
-   and report each file's fate. A restore that fails is reported loudly.
+   and report each file's fate. A restore that fails is reported loudly. If the
+   failure is `ErrConnection`, the write itself may have gone through, so the
+   engine reads the file back first: it restores it when it holds the patched
+   content, and leaves it alone (with a note) when it holds the original or
+   anything else.
 
 The engine never opens a file itself and never builds a path; the strings in
 the report are the ones that came from the command line.
@@ -142,6 +146,9 @@ The contract, which `fsystest.Run` checks for every backend:
 - Paths with control characters, empty paths and invalid UTF-8 are refused
   with `ErrInvalidPath` before anything runs (`fsys.ValidatePath`).
 - `ctx` cancellation is honoured. `Close` may be called twice.
+- A backend that loses its connection returns an error wrapping
+  `ErrConnection`. For a `Write` that means "outcome unknown", and the engine
+  treats it that way (see step 5 above).
 
 ### The registry
 
@@ -222,7 +229,11 @@ Over that session fpatch sends, on stdin of the remote `sh`:
 
 1. `FPT=<random 128-bit token>` and the helper script (`fsys/ssh_prelude.sh`,
    embedded in the binary), which defines `fp_read` and `fp_write`.
-2. One request per operation.
+2. One request per operation, each followed by `fp_say eor`. The end-of-request
+   marker is printed whether or not the request produced a reply, so a request
+   the shell could not run at all (a full temporary directory for the
+   here-document, say) is reported as such instead of leaving fpatch waiting
+   for a reply that will never come.
 
 Every reply starts on a fresh line with the token (`<token> <kind> ...`), so
 anything the remote login scripts print can be skipped, and file content cannot
@@ -234,13 +245,15 @@ bytes, then `\n<token> end <status>`; the final `\n` is part of the framing and
 is stripped. Other replies: `notfound`, `notregular`, `denied`,
 `err <code> <message>`.
 
-**Write**: `fp_write 'path' SIZE 'expect' 'suffix' <<'FPATCH_EOF_<random>'`
+**Write**: `fp_write 'path' SIZE 'expect' 'suffix' 'newck' <<'FPATCH_EOF_<random>'`
 followed by the content and the delimiter line. The delimiter is random and
 checked not to occur in the data, so the here-document is verbatim (a quoted
 delimiter disables every expansion). A here-document always ends in a newline,
 so content that does not end in one is sent with an extra `\n` and trimmed on
-arrival with `head -c SIZE`; the staged size is checked against `SIZE`. The
-helper then: resolves symlinks, refuses non-regular files, compares
+arrival with `head -c SIZE`; the staged size is checked against `SIZE`, and
+the staged content against `newck`, the `cksum` pair of what was meant to be
+sent (bash runs a here-document that ends early, appending a newline, so a cut
+connection could otherwise commit a truncated file). The helper then: resolves symlinks, refuses non-regular files, compares
 `cksum` with `expect` (conflict detection), stages into a `mktemp` file in the
 target's directory, sets owner (best effort) and mode (from `stat`), makes the
 backup with `cp -p` if asked, and `mv -f` the new file over the target. Reply
@@ -258,8 +271,15 @@ against the real `cksum` command in tests) and recomputed remotely just
 before the new content is staged.
 
 If the connection fails, the error carries ssh's own stderr (permission denied,
-could not resolve host) and the failure is sticky: later operations fail the
-same way without retrying. Context cancellation kills the ssh process.
+could not resolve host) and wraps `ErrConnection`. A host that never answered
+stays failed: later operations fail the same way without retrying. A session
+that worked and was then lost (a dropped connection, a timeout) is replaced
+**once**, so that the engine can still undo a half-finished run; a second loss
+is final. Context cancellation kills the ssh process, and `cmd.WaitDelay`
+bounds the wait for its output pipes.
+
+The mode is read as four octal digits (`stat -c %a` on GNU, the last four digits
+of `stat -f %p` on BSD), so setuid, setgid and sticky bits survive on both.
 
 ## Decision record
 

@@ -42,7 +42,22 @@ fp_res() {
   return 0
 }
 
-fp_mode() { stat -c %a "$1" 2>/dev/null || stat -f %Lp "$1" 2>/dev/null; }
+# fp_mode FILE: the mode as four octal digits, setuid/setgid/sticky included.
+# GNU stat has %a; BSD stat's %p is the whole st_mode, of which the last four
+# octal digits are the mode.
+fp_mode() {
+  if fp_m=$(stat -c %a "$1" 2>/dev/null); then
+    :
+  elif fp_m=$(stat -f %p "$1" 2>/dev/null); then
+    fp_m=${fp_m#${fp_m%????}}
+  else
+    return 1
+  fi
+  case $fp_m in
+    '' | *[!0-7]*) return 1 ;;
+  esac
+  printf '%04o' $((0$fp_m))
+}
 
 fp_owner() { stat -c %u:%g "$1" 2>/dev/null || stat -f %u:%g "$1" 2>/dev/null; }
 
@@ -90,16 +105,19 @@ fp_clean() {
   fp_t=
 }
 
-# fp_write PATH SIZE EXPECT BACKUP-SUFFIX: replace the content of an existing
-# regular file with the here-document on stdin. SIZE is the content length;
-# the here-document holds the content plus a final newline when the content
-# does not end in one. EXPECT, when not empty, is the "CRC SIZE" the file must
-# still have. Reply "done", or "err CODE MESSAGE".
+# fp_write PATH SIZE EXPECT BACKUP-SUFFIX NEWCK: replace the content of an
+# existing regular file with the here-document on stdin. SIZE is the content
+# length; the here-document holds the content plus a final newline when the
+# content does not end in one. EXPECT, when not empty, is the "CRC SIZE" the
+# file must still have. NEWCK, when not empty, is the "CRC SIZE" the new content
+# must have once staged, which catches a here-document cut short (bash runs a
+# here-document that ends early). Reply "done", or "err CODE MESSAGE".
 fp_write() {
   fp_p=$1
   fp_size=$2
   fp_expect=$3
   fp_bak=$4
+  fp_newck=$5
   fp_s=
   fp_t=
   case $fp_p in
@@ -160,9 +178,16 @@ fp_write() {
     fp_err io "transfer damaged: expected $fp_size bytes, staged $fp_got"
     return 0
   fi
+  if [ -n "$fp_newck" ]; then
+    if [ "$(fp_ck "$fp_t")" != "$fp_newck" ]; then
+      fp_clean
+      fp_err io "transfer damaged: the staged content does not match its checksum"
+      return 0
+    fi
+  fi
   fp_mo=$(fp_mode "$fp_real")
   case $fp_mo in
-    [0-7][0-7][0-7] | [0-7][0-7][0-7][0-7]) ;;
+    [0-7][0-7][0-7][0-7]) ;;
     *)
       fp_clean
       fp_err io "cannot determine the mode of $fp_p (needs GNU or BSD stat)"

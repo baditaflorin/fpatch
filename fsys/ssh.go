@@ -52,8 +52,11 @@ type sshFS struct {
 	token   string
 	waited  chan struct{} // closed once cmd.Wait has returned
 	waitErr error
-	broken  error // sticky: the session is unusable
+	broken  error // the session is unusable (see start for the one reconnect)
 	closed  bool
+
+	ready      bool // a handshake has succeeded at least once
+	reconnects int  // sessions restarted after a loss
 
 	killOnce sync.Once
 }
@@ -124,12 +127,20 @@ func (s *sshFS) abort() {
 }
 
 // start launches ssh and waits for the helper to answer. Callers hold s.mu.
+//
+// A session that worked and was then lost (a dropped connection, a timeout) may
+// be replaced once, so that the engine can still undo a half-finished run; a
+// host that never answered stays failed, and so does a second loss.
 func (s *sshFS) start(ctx context.Context) error {
-	if s.broken != nil {
-		return s.broken
-	}
 	if s.closed {
 		return errors.New("ssh file system is closed")
+	}
+	if s.broken != nil {
+		if !s.ready || s.reconnects >= 1 {
+			return s.broken
+		}
+		s.reconnects++
+		s.reset()
 	}
 	if s.cmd != nil {
 		return nil
@@ -146,6 +157,9 @@ func (s *sshFS) start(ctx context.Context) error {
 	s.token = hex.EncodeToString(tok[:])
 
 	cmd := exec.Command(bin, sshArgs(s.alias)...)
+	// Do not wait forever for output pipes that a grandchild (a ProxyCommand,
+	// say) still holds after ssh itself was killed.
+	cmd.WaitDelay = 3 * time.Second
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return err
@@ -181,11 +195,31 @@ func (s *sshFS) start(ctx context.Context) error {
 		s.broken = fmt.Errorf("ssh %s: unexpected answer %q from the remote shell", s.alias, kind)
 		return s.broken
 	}
+	s.ready = true
 	return nil
 }
 
-// fail turns a broken connection into a sticky error that carries ssh's own
-// message (permission denied, could not resolve host, ...).
+// reset forgets a dead session so that start can launch a new one.
+func (s *sshFS) reset() {
+	s.abort()
+	if s.waited != nil {
+		select {
+		case <-s.waited:
+		case <-time.After(5 * time.Second):
+		}
+	}
+	if s.stdin != nil {
+		_ = s.stdin.Close()
+	}
+	s.cmd, s.stdin, s.pr, s.stdout, s.waited = nil, nil, nil, nil, nil
+	s.broken = nil
+	s.stderr = &tailBuffer{}
+	s.killOnce = sync.Once{}
+}
+
+// fail turns a broken connection into an error that carries ssh's own
+// message (permission denied, could not resolve host, ...) and wraps
+// ErrConnection: the state of the request in flight is unknown.
 func (s *sshFS) fail(ctx context.Context, cause error) error {
 	select {
 	case <-s.waited:
@@ -194,7 +228,7 @@ func (s *sshFS) fail(ctx context.Context, cause error) error {
 		<-s.waited
 	}
 	if err := ctx.Err(); err != nil {
-		s.broken = fmt.Errorf("ssh %s: %w", s.alias, err)
+		s.broken = fmt.Errorf("ssh %s: %w: %w", s.alias, ErrConnection, err)
 		return s.broken
 	}
 	msg := s.stderr.String()
@@ -202,11 +236,11 @@ func (s *sshFS) fail(ctx context.Context, cause error) error {
 	case errors.Is(cause, ErrTooLarge):
 		s.broken = fmt.Errorf("ssh %s: %w", s.alias, ErrTooLarge)
 	case msg != "":
-		s.broken = fmt.Errorf("ssh %s: %s", s.alias, strings.ReplaceAll(msg, "\n", "; "))
+		s.broken = fmt.Errorf("ssh %s: %s: %w", s.alias, strings.ReplaceAll(msg, "\n", "; "), ErrConnection)
 	case s.waitErr != nil:
-		s.broken = fmt.Errorf("ssh %s: connection ended: %v", s.alias, s.waitErr)
+		s.broken = fmt.Errorf("ssh %s: connection ended (%v): %w", s.alias, s.waitErr, ErrConnection)
 	default:
-		s.broken = fmt.Errorf("ssh %s: connection ended unexpectedly: %v", s.alias, cause)
+		s.broken = fmt.Errorf("ssh %s: connection ended unexpectedly (%v): %w", s.alias, cause, ErrConnection)
 	}
 	return s.broken
 }
@@ -272,6 +306,25 @@ func (s *sshFS) readBody() ([]byte, error) {
 	}
 }
 
+// expectEOR reads the end-of-request marker every request is followed by. A
+// request whose helper never ran (the shell could not even start the function)
+// produces the marker without a reply, which readReply's callers report.
+func (s *sshFS) expectEOR() error {
+	kind, _, err := s.readReply()
+	if err != nil {
+		return err
+	}
+	if kind != "eor" {
+		return fmt.Errorf("unexpected reply %q where the end of the request was due", kind)
+	}
+	return nil
+}
+
+// noReply handles an "eor" where a reply should have been.
+func (s *sshFS) noReply(path string) error {
+	return fmt.Errorf("ssh %s: %s: the remote shell ran the request without answering (is its temporary directory full?)", s.alias, path)
+}
+
 func (s *sshFS) Read(ctx context.Context, path string) (File, error) {
 	if err := ValidatePath(path); err != nil {
 		return File{}, err
@@ -287,37 +340,49 @@ func (s *sshFS) Read(ctx context.Context, path string) (File, error) {
 	stop := context.AfterFunc(ctx, s.abort)
 	defer stop()
 
-	if _, err := io.WriteString(s.stdin, "fp_read "+shQuote(path)+"\n"); err != nil {
+	if _, err := io.WriteString(s.stdin, "fp_read "+shQuote(path)+"\nfp_say eor\n"); err != nil {
 		return File{}, s.fail(ctx, err)
 	}
 	kind, rest, err := s.readReply()
 	if err != nil {
 		return File{}, s.fail(ctx, err)
 	}
+	var (
+		file File
+		rerr error
+	)
 	switch kind {
+	case "eor":
+		return File{}, s.noReply(path)
 	case "ok":
 		data, err := s.readBody()
+		if errors.Is(err, ErrTooLarge) {
+			s.abort()
+			return File{}, s.fail(ctx, err)
+		}
 		if err != nil {
-			if errors.Is(err, ErrTooLarge) {
-				s.abort()
-				return File{}, s.fail(ctx, err)
-			}
-			return File{}, fmt.Errorf("%s: %w", path, err)
+			rerr = fmt.Errorf("%s: %w", path, err)
+			break
 		}
 		mode, _ := strconv.ParseUint(strings.TrimSpace(rest), 8, 32)
-		return File{Data: data, Version: sshVersion(data), Mode: fs.FileMode(mode).Perm()}, nil
+		file = File{Data: data, Version: sshVersion(data), Mode: fs.FileMode(mode).Perm()}
 	case "notfound":
-		return File{}, fmt.Errorf("%s: %w", path, fs.ErrNotExist)
+		rerr = fmt.Errorf("%s: %w", path, fs.ErrNotExist)
 	case "notregular":
-		return File{}, fmt.Errorf("%s: %w", path, ErrNotRegular)
+		rerr = fmt.Errorf("%s: %w", path, ErrNotRegular)
 	case "denied":
-		return File{}, fmt.Errorf("%s: %w", path, fs.ErrPermission)
+		rerr = fmt.Errorf("%s: %w", path, fs.ErrPermission)
 	case "err":
-		return File{}, s.remoteErr(path, rest)
+		rerr = s.remoteErr(path, rest)
+	default:
+		s.abort()
+		s.broken = fmt.Errorf("ssh %s: unexpected reply %q", s.alias, kind)
+		return File{}, s.broken
 	}
-	s.abort()
-	s.broken = fmt.Errorf("ssh %s: unexpected reply %q", s.alias, kind)
-	return File{}, s.broken
+	if err := s.expectEOR(); err != nil {
+		return File{}, s.fail(ctx, err)
+	}
+	return file, rerr
 }
 
 func (s *sshFS) Write(ctx context.Context, path string, data []byte, opts WriteOptions) error {
@@ -355,9 +420,9 @@ func (s *sshFS) Write(ctx context.Context, path string, data []byte, opts WriteO
 		body = append(append(make([]byte, 0, len(data)+1), data...), '\n')
 	}
 	var req bytes.Buffer
-	fmt.Fprintf(&req, "fp_write %s %d %s %s <<'%s'\n", shQuote(path), len(data), shQuote(opts.ExpectVersion), shQuote(opts.BackupSuffix), delim)
+	fmt.Fprintf(&req, "fp_write %s %d %s %s %s <<'%s'\n", shQuote(path), len(data), shQuote(opts.ExpectVersion), shQuote(opts.BackupSuffix), shQuote(sshVersion(data)), delim)
 	req.Write(body)
-	req.WriteString(delim + "\n")
+	req.WriteString(delim + "\nfp_say eor\n")
 	if _, err := s.stdin.Write(req.Bytes()); err != nil {
 		return s.fail(ctx, err)
 	}
@@ -365,15 +430,22 @@ func (s *sshFS) Write(ctx context.Context, path string, data []byte, opts WriteO
 	if err != nil {
 		return s.fail(ctx, err)
 	}
+	var werr error
 	switch kind {
+	case "eor":
+		return s.noReply(path)
 	case "done":
-		return nil
 	case "err":
-		return s.remoteErr(path, rest)
+		werr = s.remoteErr(path, rest)
+	default:
+		s.abort()
+		s.broken = fmt.Errorf("ssh %s: unexpected reply %q", s.alias, kind)
+		return s.broken
 	}
-	s.abort()
-	s.broken = fmt.Errorf("ssh %s: unexpected reply %q", s.alias, kind)
-	return s.broken
+	if err := s.expectEOR(); err != nil {
+		return s.fail(ctx, err)
+	}
+	return werr
 }
 
 // remoteErr maps an "err CODE MESSAGE" reply to a Go error.

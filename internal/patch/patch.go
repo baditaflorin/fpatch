@@ -99,6 +99,7 @@ type applier struct {
 	ix     lineIndex
 	opt    Options
 	ending string
+	grams  *grams // lazily built by explainMiss
 }
 
 const bom = "\xef\xbb\xbf"
@@ -253,7 +254,10 @@ func plural(n int) string {
 }
 
 func (a *applier) explainMiss(anchor string, hr *HunkResult) {
-	hr.Nearest = nearest(a.text, anchor)
+	if a.grams == nil {
+		a.grams = newGrams(a.text) // built once, however many hunks miss
+	}
+	hr.Nearest = a.grams.nearest(anchor)
 	hr.Hints = hints(a.text, anchor, a.ending)
 }
 
@@ -351,9 +355,13 @@ func (a *applier) insertionPoint(after bool, start, end int) int {
 func (a *applier) alreadyThere(after bool, at int, body string) bool {
 	if after {
 		rest := a.text[at:]
-		return strings.HasPrefix(rest, body+"\n") || rest == body
+		// "rest == body" is the form at the end of a file with no final
+		// newline; an empty body has no such form (nothing follows).
+		return strings.HasPrefix(rest, body+"\n") || (body != "" && rest == body)
 	}
-	return strings.HasSuffix(a.text[:at], body+"\n")
+	pre := a.text[:at]
+	// The lines must start on a line boundary: "xfoo\n" does not hold "foo\n".
+	return strings.HasSuffix(pre, body+"\n") && (len(pre) == len(body)+1 || pre[len(pre)-len(body)-2] == '\n')
 }
 
 func (a *applier) appendText(h spec.Hunk, hr *HunkResult) []edit {

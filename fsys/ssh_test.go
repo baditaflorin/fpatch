@@ -47,6 +47,11 @@ case $host in
     exit 255 ;;
   hang*)
     exec sleep 60 ;;
+  nowrite*)
+    # The remote shell never gets to run fp_write: the request line is
+    # renamed to a command that does not exist.
+    sed -u 's/^fp_write /fp_nowrite /' | /bin/sh -c "$*"
+    exit $? ;;
   noisy*)
     printf 'Last login: yesterday, no newline'
     echo
@@ -334,5 +339,134 @@ func TestHeredocDelimiterNeverOccursInTheData(t *testing.T) {
 			t.Fatalf("bad delimiter %q", d)
 		}
 		seen[d] = true
+	}
+}
+
+func TestSSHReconnectsOnceToLetARollbackRun(t *testing.T) {
+	log := fakeSSH(t)
+	env := fsystest.NewDirEnv(t)
+	env.Put(t, "a", []byte("old\n"), 0o644)
+	f := newSSH(t, "web1")
+	ctx := context.Background()
+	if _, err := f.Read(ctx, env.Path("a")); err != nil {
+		t.Fatal(err)
+	}
+	fsys.KillSSHSession(f) // the connection drops between two requests
+	if _, err := f.Read(ctx, env.Path("a")); !errors.Is(err, fsys.ErrConnection) {
+		t.Fatalf("the request that finds the connection dead: %v, want fsys.ErrConnection", err)
+	}
+	got, err := f.Read(ctx, env.Path("a"))
+	if err != nil || string(got.Data) != "old\n" {
+		t.Fatalf("the next request must use a new session: %q, %v", got.Data, err)
+	}
+	if n := len(calls(t, log)); n != 2 {
+		t.Errorf("%d ssh processes, want 2 (the original and one replacement)", n)
+	}
+	// Only one replacement: a second loss stays a failure.
+	fsys.KillSSHSession(f)
+	for i := 0; i < 2; i++ {
+		if _, err := f.Read(ctx, env.Path("a")); !errors.Is(err, fsys.ErrConnection) {
+			t.Fatalf("request %d after the second loss: %v, want fsys.ErrConnection", i, err)
+		}
+	}
+	if n := len(calls(t, log)); n != 2 {
+		t.Errorf("%d ssh processes, want still 2", n)
+	}
+}
+
+func TestSSHReportsARequestTheRemoteShellCouldNotRun(t *testing.T) {
+	if out, err := exec.Command("sed", "-u", "p").CombinedOutput(); err != nil {
+		t.Skipf("sed -u is not available: %v %s", err, out)
+	}
+	fakeSSH(t)
+	env := fsystest.NewDirEnv(t)
+	env.Put(t, "a", []byte("old\n"), 0o644)
+	f := newSSH(t, "nowrite-host")
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	err := f.Write(ctx, env.Path("a"), []byte("new\n"), fsys.WriteOptions{})
+	if err == nil || !strings.Contains(err.Error(), "without answering") {
+		t.Fatalf("err = %v, want a report that the request got no answer (and not a hang)", err)
+	}
+	// The session is still in step afterwards.
+	got, err := f.Read(ctx, env.Path("a"))
+	if err != nil || string(got.Data) != "old\n" {
+		t.Errorf("Read after the lost request: %q, %v", got.Data, err)
+	}
+}
+
+// runHelper feeds a request to the embedded helper in a plain /bin/sh and
+// returns what it printed.
+func runHelper(t *testing.T, shell, request string) string {
+	t.Helper()
+	cmd := exec.Command(shell)
+	cmd.Stdin = strings.NewReader("FPT=tok\n" + fsys.SSHPrelude + "\n" + request)
+	out, _ := cmd.CombinedOutput()
+	return string(out)
+}
+
+func TestHelperChecksTheStagedContentAgainstItsChecksum(t *testing.T) {
+	dir := t.TempDir()
+	f := filepath.Join(dir, "f")
+	if err := os.WriteFile(f, []byte("old\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	q := fsys.ShQuote
+	wrong := runHelper(t, "/bin/sh", "fp_write "+q(f)+" 4 '' '' '1 4' <<'D'\nnew\nD\n")
+	if !strings.Contains(wrong, "tok err io transfer damaged") {
+		t.Errorf("a wrong checksum was accepted: %q", wrong)
+	}
+	if d, _ := os.ReadFile(f); string(d) != "old\n" {
+		t.Errorf("the file changed: %q", d)
+	}
+	right := runHelper(t, "/bin/sh", "fp_write "+q(f)+" 4 '' '' "+q(fsys.SSHVersion([]byte("new\n")))+" <<'D'\nnew\nD\n")
+	if !strings.Contains(right, "tok done") {
+		t.Errorf("the right checksum was refused: %q", right)
+	}
+	if d, _ := os.ReadFile(f); string(d) != "new\n" {
+		t.Errorf("the file is %q", d)
+	}
+	if entries, _ := os.ReadDir(dir); len(entries) != 1 {
+		t.Errorf("temporary files left behind: %v", entries)
+	}
+}
+
+// bash runs a here-document that ends early (dash drops the command); the
+// checksum must catch a cut-off body.
+func TestHelperRefusesATruncatedHereDocumentUnderBash(t *testing.T) {
+	bash, err := exec.LookPath("bash")
+	if err != nil {
+		t.Skip("no bash")
+	}
+	dir := t.TempDir()
+	f := filepath.Join(dir, "f")
+	if err := os.WriteFile(f, []byte("old\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	q := fsys.ShQuote
+	// Content "abcd" (4 bytes, no final newline), stream cut after "abc".
+	out := runHelper(t, bash, "fp_write "+q(f)+" 4 '' '' "+q(fsys.SSHVersion([]byte("abcd")))+" <<'D'\nabc")
+	if !strings.Contains(out, "transfer damaged") {
+		t.Errorf("output = %q, want the damaged-transfer error", out)
+	}
+	if d, _ := os.ReadFile(f); string(d) != "old\n" {
+		t.Errorf("the file changed: %q", d)
+	}
+}
+
+func TestHelperModeKeepsSpecialBits(t *testing.T) {
+	dir := t.TempDir()
+	cases := map[os.FileMode]string{0o640: "0640", 0o755 | os.ModeSetuid: "4755", 0o777 | os.ModeSticky: "1777", 0: "0000", 0o4: "0004", 0o44: "0044"}
+	for mode, want := range cases {
+		f := filepath.Join(dir, "f"+want)
+		if err := os.WriteFile(f, nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(f, mode); err != nil {
+			t.Fatal(err)
+		}
+		if got := strings.TrimSpace(runHelper(t, "/bin/sh", "printf '%s' \"$(fp_mode "+fsys.ShQuote(f)+")\"\n")); got != want {
+			t.Errorf("fp_mode of %v = %q, want %q", mode, got, want)
+		}
 	}
 }

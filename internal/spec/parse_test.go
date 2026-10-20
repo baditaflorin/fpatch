@@ -211,6 +211,8 @@ func TestParseErrors(t *testing.T) {
 		{"append option", "=== append count=2\nx\n=== end\n", 1, "takes no options"},
 		{"heading not atx", "=== upsert-section Install\n=== end\n", 1, "Markdown heading"},
 		{"heading unterminated quote", "=== upsert-section \"## x\n=== end\n", 1, "bad quoted heading"},
+		{"heading with a control character", "=== upsert-section \"## a\\u0001b\"\n=== end\n", 1, "control characters"},
+		{"heading with a newline", "=== upsert-section \"## a\\nb\"\n=== end\n", 1, "control characters"},
 		{"file without path", "=== file\n=== append\nx\n=== end\n", 1, "needs a file path"},
 		{"file without hunks", "=== file a\n=== file b\n=== append\nx\n=== end\n", 1, "no hunks"},
 		{"trailing file", "=== file a\n=== append\nx\n=== end\n=== file b\n", 5, "no hunks"},

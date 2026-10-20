@@ -3,6 +3,7 @@ package engine_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -370,5 +371,72 @@ func TestCancelledContextIsAnIOError(t *testing.T) {
 	}
 	if !strings.Contains(rep.Files[0].Error, "canceled") {
 		t.Errorf("error = %q", rep.Files[0].Error)
+	}
+}
+
+// lossy loses the connection on the first write to one path: after the write
+// has taken effect (the reply was lost), or before it (drop).
+type lossy struct {
+	*memfs.FS
+	path  string
+	drop  bool
+	calls int
+}
+
+func (l *lossy) Write(ctx context.Context, p string, data []byte, o fsys.WriteOptions) error {
+	if p == l.path {
+		l.calls++
+		if l.calls == 1 {
+			if !l.drop {
+				if err := l.FS.Write(ctx, p, data, o); err != nil {
+					return err
+				}
+			}
+			return fmt.Errorf("%s: %w", p, fsys.ErrConnection)
+		}
+	}
+	return l.FS.Write(ctx, p, data, o)
+}
+
+func TestLostConnectionDuringAWriteThatWentThroughIsUndone(t *testing.T) {
+	m := memfs.New()
+	m.Put("a", []byte("old a\n"), 0o644)
+	m.Put("b", []byte("old b\n"), 0o644)
+	rep := run(t, &lossy{FS: m, path: "b"}, []string{"a", "b"}, swap, engine.Options{})
+	if rep.ExitCode != engine.ExitIO {
+		t.Fatalf("exit = %d", rep.ExitCode)
+	}
+	for _, name := range []string{"a", "b"} {
+		if got := content(t, m, name); got != "old "+name+"\n" {
+			t.Errorf("%s = %q, want the original (the write whose reply was lost must be undone too)", name, got)
+		}
+	}
+	if got := statusOf(rep); !reflect.DeepEqual(got, []string{engine.StatusRolledBack, engine.StatusRolledBack}) {
+		t.Errorf("statuses = %v", got)
+	}
+	if !strings.Contains(strings.Join(rep.Notes, "|"), "holds the patched content") {
+		t.Errorf("notes = %v", rep.Notes)
+	}
+}
+
+func TestLostConnectionBeforeTheWriteLeavesTheFileAlone(t *testing.T) {
+	m := memfs.New()
+	m.Put("a", []byte("old a\n"), 0o644)
+	m.Put("b", []byte("old b\n"), 0o644)
+	rep := run(t, &lossy{FS: m, path: "b", drop: true}, []string{"a", "b"}, swap, engine.Options{})
+	if rep.ExitCode != engine.ExitIO || content(t, m, "a") != "old a\n" || content(t, m, "b") != "old b\n" {
+		t.Fatalf("exit=%d a=%q b=%q", rep.ExitCode, content(t, m, "a"), content(t, m, "b"))
+	}
+	if rep.Files[1].Status != engine.StatusFailed || !strings.Contains(strings.Join(rep.Notes, "|"), "was not replaced") {
+		t.Errorf("b status=%s notes=%v", rep.Files[1].Status, rep.Notes)
+	}
+}
+
+func TestNoDiffSkipsRenderingDiffs(t *testing.T) {
+	m := memfs.New()
+	m.Put("a", []byte("old\n"), 0o644)
+	rep := run(t, m, []string{"a"}, swap, engine.Options{NoDiff: true})
+	if rep.ExitCode != engine.ExitApplied || !rep.Files[0].Changed || rep.Files[0].Diff != "" {
+		t.Errorf("exit=%d changed=%v diff=%q", rep.ExitCode, rep.Files[0].Changed, rep.Files[0].Diff)
 	}
 }

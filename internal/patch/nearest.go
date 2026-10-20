@@ -12,16 +12,37 @@ const maxCells = 40_000_000
 // minSimilarity is the score below which a "nearest match" would only mislead.
 const minSimilarity = 0.4
 
-// nearest finds the run of lines in content that looks most like anchor. The
-// score of a window is the mean, over the non-blank anchor lines, of the best
-// similarity any line of the window has to that anchor line (similarity: Dice
-// coefficient of the byte bigrams, whitespace collapsed). It returns nil when
-// nothing is similar enough or the file is too big to search.
-func nearest(content, anchor string) *Nearest {
+// grams is the per-file part of the nearest-match search: the lines of the file
+// with their normalised form and bigrams, computed once per file.
+type grams struct {
+	lines []string
+	norm  []string
+	bg    [][]uint16
+}
+
+func newGrams(content string) *grams {
 	cl := strings.Split(content, "\n")
 	if len(cl) > 1 && cl[len(cl)-1] == "" {
 		cl = cl[:len(cl)-1]
 	}
+	g := &grams{lines: cl, norm: make([]string, len(cl)), bg: make([][]uint16, len(cl))}
+	for j, l := range cl {
+		g.norm[j] = collapse(l)
+		g.bg[j] = bigrams(g.norm[j])
+	}
+	return g
+}
+
+// nearest finds the run of lines in content that looks most like anchor.
+func nearest(content, anchor string) *Nearest { return newGrams(content).nearest(anchor) }
+
+// nearest finds the run of lines that looks most like anchor. The score of a
+// window is the mean, over the non-blank anchor lines, of the best similarity
+// any line of the window has to that anchor line (similarity: Dice coefficient
+// of the byte bigrams, whitespace collapsed). It returns nil when nothing is
+// similar enough or the file is too big to search.
+func (g *grams) nearest(anchor string) *Nearest {
+	cl := g.lines
 	al := strings.Split(anchor, "\n")
 	if len(al) > 1 && al[len(al)-1] == "" {
 		al = al[:len(al)-1]
@@ -41,19 +62,13 @@ func nearest(content, anchor string) *Nearest {
 		return nil
 	}
 
-	cb := make([][]uint16, len(cl))
-	cn := make([]string, len(cl))
-	for j, l := range cl {
-		cn[j] = collapse(l)
-		cb[j] = bigrams(cn[j])
-	}
 	sim := make([][]float32, m)
 	for i, ai := range scored {
 		an := collapse(al[ai])
 		ab := bigrams(an)
 		row := make([]float32, len(cl))
 		for j := range cl {
-			row[j] = dice(ab, cb[j], an == cn[j])
+			row[j] = dice(ab, g.bg[j], an == g.norm[j])
 		}
 		sim[i] = row
 	}

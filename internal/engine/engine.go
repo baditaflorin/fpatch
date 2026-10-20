@@ -44,6 +44,7 @@ type Options struct {
 	DryRun     bool
 	Backup     bool // keep the previous content of every changed file at FILE.bak
 	Idempotent bool // an already-applied hunk counts as success
+	NoDiff     bool // do not render diffs (they cost time on huge files and may quote secrets)
 }
 
 // Request is one run.
@@ -123,7 +124,9 @@ func Run(ctx context.Context, fs fsys.FS, req Request) Report {
 			fr.Status = StatusUnchanged
 		default:
 			fr.Changed = true
-			fr.Diff = diff.Unified(path, res.Before, res.After)
+			if !req.NoDiff {
+				fr.Diff = diff.Unified(path, res.Before, res.After)
+			}
 			changed = append(changed, pending{idx: i, path: path, version: f.Version, orig: f.Data, content: res.Content})
 		}
 		rep.Files[i] = fr
@@ -178,9 +181,43 @@ func (rep *Report) write(ctx context.Context, fs fsys.FS, req Request, changed [
 		for _, q := range changed[n+1:] {
 			rep.Files[q.idx].Status = StatusNotWritten
 		}
-		rep.rollback(ctx, fs, changed[:n])
+		ctx, cancel := recoveryContext(ctx)
+		defer cancel()
+		undo := changed[:n]
+		// After a lost connection the failed write may have gone through. Look
+		// at the file before deciding: restore it if it holds the patched
+		// content, leave it alone otherwise.
+		if errors.Is(err, fsys.ErrConnection) && rep.settle(ctx, fs, p) {
+			undo = changed[:n+1]
+		}
+		rep.rollback(ctx, fs, undo)
 		return
 	}
+}
+
+// recoveryContext gives the recovery steps their own time budget, so they run
+// even when the run's context has already expired (a timeout, say).
+func recoveryContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+}
+
+// settle looks at a file whose write failed with an unknown outcome. It reports
+// whether the file holds the patched content (and so must be restored); in every
+// other case it records what it found.
+func (rep *Report) settle(ctx context.Context, fs fsys.FS, p pending) bool {
+	cur, err := fs.Read(ctx, p.path)
+	switch {
+	case err != nil:
+		rep.Notes = append(rep.Notes, fmt.Sprintf("%s: the connection failed during the write and the file could not be read back (%v): it may or may not hold the patched content", p.path, err))
+	case bytes.Equal(cur.Data, p.content):
+		rep.Notes = append(rep.Notes, fmt.Sprintf("%s: the connection failed during the write, but the file holds the patched content", p.path))
+		return true
+	case bytes.Equal(cur.Data, p.orig):
+		rep.Notes = append(rep.Notes, fmt.Sprintf("%s: the connection failed during the write; the file was not replaced", p.path))
+	default:
+		rep.Notes = append(rep.Notes, fmt.Sprintf("%s: the connection failed during the write and the file now holds neither the original nor the patched content (someone else changed it); it was left alone", p.path))
+	}
+	return false
 }
 
 // cleanError is the text of err without the path (and the failed operation),
@@ -193,15 +230,9 @@ func cleanError(path string, err error) string {
 	return strings.TrimPrefix(err.Error(), path+": ")
 }
 
-// rollback restores the files in done to their original content. It runs even
-// when the run's own context is already cancelled (a timeout, say), but gives
-// up after a short time of its own.
+// rollback restores the files in done to their original content, last first.
+// ctx should come from recoveryContext.
 func (rep *Report) rollback(ctx context.Context, fs fsys.FS, done []pending) {
-	if len(done) == 0 {
-		return
-	}
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
-	defer cancel()
 	for i := len(done) - 1; i >= 0; i-- {
 		p := done[i]
 		fr := &rep.Files[p.idx]

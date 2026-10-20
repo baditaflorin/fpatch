@@ -361,6 +361,34 @@ func TestIdempotent(t *testing.T) {
 	}
 }
 
+func TestIdempotentInsertNeedsTheLinesOnALineBoundary(t *testing.T) {
+	// "xfoo" is not the line "foo".
+	r := apply(t, "xfoo\nbar\n", "=== insert-before\nbar\n=== with\nfoo\n=== end\n", true)
+	if r.Failed || string(r.Content) != "xfoo\nfoo\nbar\n" || r.Hunks[0].Status != Applied {
+		t.Errorf("insert-before: content=%q %+v", r.Content, r.Hunks)
+	}
+	// A blank line is added once, also at the end of a file that ends in a newline.
+	const blank = "=== insert-after\na\n=== with\n\n=== end\n"
+	r = apply(t, "a\n", blank, true)
+	if r.Failed || string(r.Content) != "a\n\n" || r.Hunks[0].Status != Applied {
+		t.Fatalf("blank line: content=%q %+v", r.Content, r.Hunks)
+	}
+	if again := apply(t, string(r.Content), blank, true); again.Changed || again.Hunks[0].Status != AlreadyApplied {
+		t.Errorf("second run: changed=%v %+v", again.Changed, again.Hunks)
+	}
+}
+
+func TestTabIndentedLinesAreCodeNotHeadings(t *testing.T) {
+	r := apply(t, "## S\nold\n\t## Other\ntail\n", "=== upsert-section \"## S\"\nnew\n=== end\n", false)
+	if r.Failed || string(r.Content) != "## S\nnew\n" {
+		t.Errorf("content=%q %+v: a tab-indented line must not end the section", r.Content, r.Hunks)
+	}
+	r = apply(t, "\t## S\nx\n## S\ny\n", "=== upsert-section \"## S\"\nz\n=== end\n", false)
+	if r.Failed || string(r.Content) != "\t## S\nx\n## S\nz\n" {
+		t.Errorf("content=%q %+v: a tab-indented heading must not count as a second one", r.Content, r.Hunks)
+	}
+}
+
 func TestWithoutIdempotentASecondRunIsAnError(t *testing.T) {
 	spec := "=== replace\nfoo\n=== with\nbar\n=== end\n"
 	if r := apply(t, "foo\n", spec, false); r.Failed {

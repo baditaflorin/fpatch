@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -201,6 +202,9 @@ func (p *parser) top(n int, line, kw, rest string, isDir bool) error {
 				return &SyntaxError{Line: n, Msg: fmt.Sprintf("bad quoted heading %s", heading)}
 			}
 			heading = u
+		}
+		if i := strings.IndexFunc(heading, unicode.IsControl); i >= 0 {
+			return &SyntaxError{Line: n, Msg: "the section heading must be a single line without control characters"}
 		}
 		if _, _, ok := ParseHeading(heading); !ok {
 			return &SyntaxError{Line: n, Msg: fmt.Sprintf("%q needs a Markdown heading such as %q, got %q", p.marker+" upsert-section", `"## Install"`, heading)}

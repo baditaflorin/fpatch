@@ -215,3 +215,17 @@ func FuzzUnified(f *testing.F) {
 		}
 	})
 }
+
+func TestUnifiedFallsBackWhenTheWorkBudgetIsSpent(t *testing.T) {
+	old := maxWork
+	maxWork = 50
+	defer func() { maxWork = old }()
+	r := rand.New(rand.NewSource(5))
+	for n := 0; n < 200; n++ {
+		a := randText(r, 40+r.Intn(60), true)
+		b := randText(r, 40+r.Intn(60), r.Intn(2) == 0)
+		if got := applyUnified(t, a, Unified("f", a, b)); got != b {
+			t.Fatalf("the budget fallback broke the diff\n a=%q\n b=%q", a, b)
+		}
+	}
+}

@@ -28,9 +28,9 @@ func headings(text string, ix lineIndex) []heading {
 			break
 		}
 		line := text[start:end]
-		trim := strings.TrimLeft(line, " ")
-		if len(line)-len(trim) > 3 {
-			continue // indented code: neither a fence nor a heading
+		trim := strings.TrimLeft(line, " \t")
+		if lead := line[:len(line)-len(trim)]; len(lead) > 3 || strings.Contains(lead, "\t") {
+			continue // indented code (four columns, a tab counts as four): neither a fence nor a heading
 		}
 		if fenceLen > 0 {
 			if ch, n, rest := fence(trim); n >= fenceLen && ch == fenceCh && strings.TrimSpace(rest) == "" {

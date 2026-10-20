@@ -10,6 +10,12 @@ import (
 // Context is the number of unchanged lines shown around each change.
 const Context = 3
 
+// maxWork bounds the total steps of the Myers search (a variable so tests can
+// shrink it). A very large file with many scattered changes would otherwise
+// take seconds; past the budget the changed region is shown as one removed and
+// one added block, which is still a correct diff.
+var maxWork = 100_000_000
+
 // maxEdits bounds the Myers search. Beyond it the changed region is shown as
 // one block removed and one block added, which is still a correct diff.
 const maxEdits = 2000
@@ -90,7 +96,12 @@ func myers(a, b []string) []edit {
 	off := max + 1
 	v := make([]int, 2*max+4)
 	trace := make([][]int, 0, 16)
+	work := 0
 	for d := 0; d <= max; d++ {
+		work += d + 1
+		if work > maxWork {
+			return blockEdits(a, b)
+		}
 		trace = append(trace, append([]int(nil), v[off-d-1:off+d+2]...))
 		for k := -d; k <= d; k += 2 {
 			var x int
@@ -103,6 +114,7 @@ func myers(a, b []string) []edit {
 			for x < n && y < m && a[x] == b[y] {
 				x++
 				y++
+				work++
 			}
 			v[off+k] = x
 			if x >= n && y >= m {

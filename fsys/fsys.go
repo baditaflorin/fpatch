@@ -40,6 +40,11 @@ var (
 	ErrConflict = errors.New("file changed since it was read")
 	// ErrTooLarge is returned for files above MaxFileSize.
 	ErrTooLarge = errors.New("file too large")
+	// ErrConnection is returned when a backend lost its connection to the
+	// store (or never got one). A Write that fails with it may or may not have
+	// taken effect, which is why the engine checks the file before it decides
+	// how to undo a run.
+	ErrConnection = errors.New("connection to the remote side failed")
 	// ErrInvalidPath is returned for empty paths and paths with control
 	// characters or invalid UTF-8.
 	ErrInvalidPath = errors.New("invalid path")
